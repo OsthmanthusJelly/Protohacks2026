@@ -1,19 +1,5 @@
 COMPILE_ERROR 
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x3c): undefined reference to `InitWindow'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x48): undefined reference to `SetTargetFPS'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0xf0): undefined reference to `BeginDrawing'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0xfc): undefined reference to `ClearBackground'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x10f): undefined reference to `TextFormat'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x137): undefined reference to `DrawText'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x151): undefined reference to `TextFormat'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x179): undefined reference to `DrawText'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x193): undefined reference to `TextFormat'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x1bb): undefined reference to `DrawText'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x1ce): undefined reference to `TextFormat'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x1f6): undefined reference to `DrawText'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x237): undefined reference to `DrawText'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x23c): undefined reference to `EndDrawing'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x241): undefined reference to `WindowShouldClose'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x24e): undefined reference to `GetFrameTime'
-C:\Users\Spencer\AppData\Local\Temp\cc3hjBzZ.o:tamagotchi.cpp:(.text.startup+0x2f1): undefined reference to `CloseWindow'
-collect2.exe: error: ld returned 1 exit status
+tamagotchi.cpp:1:20: fatal error: raylib.h: No such file or directory
+ #include "raylib.h"
+                    ^
+compilation terminated.
