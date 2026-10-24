@@ -84,46 +84,75 @@ void ReadActivityLog(Pet& pet) {
     
     bool foundError = false;
     std::string newAdvice = "";
+    std::string fullErrorText = "";
 
-    // Read the file one line at a time
     while (std::getline(file, line)) {
-        
         if (line.find("COMPILE_SUCCESS") != std::string::npos) {
-            pet.addExp(); // FIXED: Capitalization matched to class method (addExp)
+            pet.addExp();
             pet.currentAdvice = "Compiled perfectly! Good job.";
-            break; // Stop reading, we don't need to look for errors
+            break; 
         }
         else if (line.find("COMPILE_ERROR") != std::string::npos) {
             foundError = true;
             pet.health -= 10;
-            pet.myMOOD = READING; // FIXED: Variable name matched to class property (myMOOD)
-            newAdvice = "I don't recognize this error, check the terminal!"; // Default advice
+            pet.myMOOD = READING;
         }
         
-        // If we know an error happened, start searching the compiler's text for clues
-        if (foundError) {
-            if (line.find("expected ';'") != std::string::npos) {
-                newAdvice = "Advice: You forgot a semicolon ';' at the end of a line!";
+        // If we hit an actual compiler error line
+        if (foundError && line.find("error:") != std::string::npos) {
+            size_t errorPos = line.find("error:");
+            fullErrorText = line.substr(errorPos + 7); // Grab everything after "error: "
+            
+            // Extract the specific variable/symbol causing the issue (usually inside ' ')
+            std::string problemItem = "something";
+            size_t firstQuote = fullErrorText.find("'");
+            size_t secondQuote = fullErrorText.find("'", firstQuote + 1);
+            if (firstQuote != std::string::npos && secondQuote != std::string::npos) {
+                problemItem = fullErrorText.substr(firstQuote, secondQuote - firstQuote + 1);
             }
-            else if (line.find("was not declared") != std::string::npos || line.find("undeclared") != std::string::npos) {
-                newAdvice = "Advice: You typed a variable name that doesn't exist. Typo?";
+
+            // TRANSLATE TO PLAIN ENGLISH
+            if (fullErrorText.find("expected ';'") != std::string::npos) {
+                newAdvice = "You forgot a semicolon ';' near " + problemItem + "!";
             }
-            else if (line.find("expected '}'") != std::string::npos) {
-                newAdvice = "Advice: You are missing a closing curly bracket '}'!";
+            else if (fullErrorText.find("was not declared in this scope") != std::string::npos) {
+                newAdvice = "You tried to use " + problemItem + ", but it hasn't been created yet!";
             }
-            else if (line.find("No such file or directory") != std::string::npos) {
-                newAdvice = "Advice: You are trying to #include a file that is missing.";
+            else if (fullErrorText.find("expected '}'") != std::string::npos) {
+                newAdvice = "You missed a closing curly brace '}' somewhere above this.";
             }
+            else if (fullErrorText.find("expected unqualified-id") != std::string::npos) {
+                newAdvice = "You put code in the wrong place, or added an extra symbol near " + problemItem + ".";
+            }
+            else if (fullErrorText.find("redefinition of") != std::string::npos) {
+                newAdvice = "You already created " + problemItem + " earlier. You can't make it twice!";
+            }
+            else if (fullErrorText.find("too few arguments to function") != std::string::npos) {
+                newAdvice = "You didn't give " + problemItem + " enough information inside its parentheses ().";
+            }
+            else if (fullErrorText.find("invalid conversion") != std::string::npos) {
+                newAdvice = "You are trying to shove the wrong type of data into a variable.";
+            }
+            else if (fullErrorText.find("No such file") != std::string::npos) {
+                newAdvice = "You tried to include " + problemItem + ", but that file doesn't exist.";
+            }
+            else {
+                // Catch-all: Just show the cleaned-up error without the file paths
+                newAdvice = "Error: " + fullErrorText;
+            }
+            
+            // Once we find the first actual error and translate it, stop reading
+            break; 
         }
     }
     file.close();
 
-    // If we found an error while reading, update the pet's advice
-    if (foundError) {
+    if (foundError && newAdvice != "") {
         pet.currentAdvice = newAdvice;
+    } else if (foundError) {
+        pet.currentAdvice = "Uh oh, the code crashed. Check the terminal!";
     }
     
-    // Empty the file so we don't read the same error on the next frame
     std::ofstream clearFile("activity.log", std::ofstream::trunc);
 }
     int main() {
