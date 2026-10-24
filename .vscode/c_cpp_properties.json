@@ -2,7 +2,10 @@
     "configurations": [
         {
             "name": "Win32",
-            "includePath": ["${workspaceFolder}/**", "C:/raylib/include"],
+            "includePath": [
+                "${workspaceFolder}/**",
+                "C:/raylib/raylib/src"
+            ],
             "compilerPath": "C:/mingw64/bin/g++.exe",
             "cppStandard": "c++20",
             "intelliSenseMode": "windows-gcc-x64"
