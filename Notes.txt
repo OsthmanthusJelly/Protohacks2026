@@ -1,10 +1,14 @@
 
 
+Installing msys2
+website: winget install msys2.msys2
+
 install raylib command (Windows - powershell/terminal)
 > vcpkg install raylib:x64-windows
 
 install raylib command (Ubuntu - powershell/terminal)
 > sudo apt install libraylib-dev
+
 
 
 n.n.n
