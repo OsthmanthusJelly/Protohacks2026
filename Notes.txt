@@ -19,6 +19,12 @@ Both options:
 
 Linux (Ubuntu): sudo apt install libraylib-dev
 
+Telling gcc to include dlls in the exe to make it run without needing user side libgcc
+g++ main.cpp -o program.exe -static-libgcc -static-libstdc++
+
+
+
+
 
 n.n.n
 - 1st number = when game is read it is 1
