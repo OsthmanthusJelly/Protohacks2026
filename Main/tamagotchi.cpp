@@ -453,8 +453,13 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--selftest") return SelfTest();
 
     // 1. Create the Raylib window
-    InitWindow(800, 600, "Tamagothu: The Dev Pet");
+    // The game is drawn at 800x600 and scaled to fit, so the window can be any size
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+    InitWindow(480, 360, "Tamagothu: The Dev Pet");
+    SetWindowMinSize(240, 180);
     SetTargetFPS(60);
+    RenderTexture2D screen = LoadRenderTexture(800, 600);
+    SetTextureFilter(screen.texture, TEXTURE_FILTER_BILINEAR);
     Sprites art = LoadSprites(); // needs the window to exist first
     std::string logPath = std::string(GetApplicationDirectory()) + "activity.log"; // next to game.exe and petlog.ps1
 
@@ -475,6 +480,12 @@ int main(int argc, char** argv) {
 
         // Track how much time passed this frame
         float dt = GetFrameTime();
+
+        // Fit the 800x600 game into the window, centred, and map the mouse back to game coordinates
+        float scale = std::min(GetScreenWidth() / 800.0f, GetScreenHeight() / 600.0f);
+        Vector2 offset = { (GetScreenWidth() - 800 * scale) / 2, (GetScreenHeight() - 600 * scale) / 2 };
+        SetMouseOffset((int)-offset.x, (int)-offset.y);
+        SetMouseScale(1 / scale, 1 / scale);
 
         // Update the pet's timers and mood
         myPet.Update(dt);
@@ -511,7 +522,7 @@ int main(int argc, char** argv) {
         float t = (float)GetTime();
 
         // 4. DRAWING PHASE
-        BeginDrawing();
+        BeginTextureMode(screen);
         ClearBackground(Color{ 43, 47, 56, 255 }); // same dark grey as the UI sprite sheet
 
         // Hearts: 10 hearts, each worth a tenth of max health. They shake when hurt and beat when low.
@@ -587,8 +598,14 @@ int main(int argc, char** argv) {
             }
         }
 
+        EndTextureMode();
+        BeginDrawing();
+        ClearBackground(Color{ 43, 47, 56, 255 });
+        // render textures are stored upside down, hence the negative height
+        DrawTexturePro(screen.texture, { 0, 0, 800, -600 }, { offset.x, offset.y, 800 * scale, 600 * scale }, { 0, 0 }, 0, WHITE);
         EndDrawing();
     }
+    UnloadRenderTexture(screen);
 
     // Clean up when the user closes the window
     auto unload = [](std::vector<Texture2D>& frames) { for (auto& tex : frames) UnloadTexture(tex); };
