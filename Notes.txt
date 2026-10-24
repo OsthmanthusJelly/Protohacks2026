@@ -1,14 +1,26 @@
 
 
-Installing msys2
-website: winget install msys2.msys2
+# 1. Clone the official repository to a permanent folder
+git clone https://github.com/microsoft/vcpkg.git
+
+# 2. Navigate into the cloned directory
+cd vcpkg
+
+# 3. Compile the vcpkg executable tool
+# On Windows:
+.\bootstrap-vcpkg.bat
+
+# On Linux / macOS:
+./bootstrap-vcpkg.sh
 
 install raylib command (Windows - powershell/terminal)
-> pacman -S mingw-w64-ucrt-x86_64-raylib
+> vcpkg install raylib:x64-windows
 
 install raylib command (Ubuntu - powershell/terminal)
 > sudo apt install libraylib-dev
 
+if needed integrate with vs code via 
+> vcpkg integrate install
 
 
 n.n.n
