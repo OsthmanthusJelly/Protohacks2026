@@ -10,10 +10,10 @@
             "problemMatcher": []
         },
         {
-            "type": "cppbuild",
+            "type": "shell",
             "label": "Build raylib file (raylib installer, C:/raylib/w64devkit)",
-            "command": "C:/raylib/w64devkit/bin/g++.exe",
-            "args": [
+            "command": "powershell",
+            "args": ["-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\Main\\petlog.ps1", "C:/raylib/w64devkit/bin/g++.exe",
                 "-fdiagnostics-color=always", "-g", "-std=c++20",
                 "${file}", "-o", "${fileDirname}\\${fileBasenameNoExtension}.exe",
                 "-IC:/raylib/raylib/src", "-LC:/raylib/raylib/src",
@@ -25,10 +25,10 @@
             "detail": "For PCs set up with the official raylib Windows installer"
         },
         {
-            "type": "cppbuild",
+            "type": "shell",
             "label": "Build raylib file (WinLibs GCC 14, C:/mingw64 + C:/raylib)",
-            "command": "C:/mingw64/bin/g++.exe",
-            "args": [
+            "command": "powershell",
+            "args": ["-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\Main\\petlog.ps1", "C:/mingw64/bin/g++.exe",
                 "-fdiagnostics-color=always", "-g", "-std=c++20",
                 "${file}", "-o", "${fileDirname}\\${fileBasenameNoExtension}.exe",
                 "-IC:/raylib/include", "-LC:/raylib/lib",

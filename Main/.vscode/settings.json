@@ -1,5 +1,12 @@
 {
     "files.associations": {
         "iostream": "cpp"
-    }
+    },
+    "terminal.integrated.profiles.windows": {
+        "Tamagotchi": {
+            "path": "powershell.exe",
+            "args": ["-NoExit", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\pet_hook.ps1"]
+        }
+    },
+    "terminal.integrated.defaultProfile.windows": "Tamagotchi"
 }

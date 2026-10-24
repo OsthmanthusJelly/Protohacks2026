@@ -1,5 +1,10 @@
 @echo off
 cd /d "%~dp0"
+:: game.exe can't be replaced while it's open, and that failure shouldn't count as your mistake
+tasklist /fi "imagename eq game.exe" | find /i "game.exe" >nul && (
+    echo The pet is already running. Close it first if you want to rebuild it.
+    exit /b 0
+)
 echo Attempting to compile your code...
 
 :: Use whichever raylib setup this PC has (see Notes.txt); plain g++ may be an old 32-bit compiler
