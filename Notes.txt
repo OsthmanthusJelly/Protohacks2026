@@ -1,10 +1,13 @@
 
 
-install raylib command (powershell/terminal)
-- vcpkg install raylib:x64-windows
+install raylib command (Windows - powershell/terminal)
+> vcpkg install raylib:x64-windows
+
+install raylib command (Ubuntu - powershell/terminal)
+> sudo apt install libraylib-dev
 
 
 n.n.n
 - 1st number = when game is read it is 1
 - 2nd number = major changes (added minigames etc)
-- 3rd number = small changes (eg moved x file to other place)
+- 3rd number = small changes (eg moved x file to other place        )
