@@ -1,0 +1,10 @@
+
+
+install raylib command (powershell/terminal)
+- vcpkg install raylib:x64-windows
+
+
+n.n.n
+- 1st number = when game is read it is 1
+- 2nd number = major changes (added minigames etc)
+- 3rd number = small changes (eg moved x file to other place)
