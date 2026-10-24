@@ -1,26 +1,23 @@
+RAYLIB SETUP (Windows) - pick ONE option, use these exact folders so the .vscode files work
 
+Option A - official raylib installer (easiest)
+1. Download the raylib Windows installer from https://raysan5.itch.io/raylib
+2. Install to C:\raylib  (you get C:\raylib\w64devkit\bin\g++.exe and C:\raylib\raylib\src\raylib.h)
+3. In VS Code: Ctrl+Shift+B -> "Build raylib file (raylib installer, ...)"
 
-# 1. Clone the official repository to a permanent folder
-git clone https://github.com/microsoft/vcpkg.git
+Option B - WinLibs GCC 14 + raylib zip
+1. winlibs.com -> x86_64, POSIX threads, MSVCRT zip -> extract to C:\  (gives C:\mingw64\bin\g++.exe)
+2. github.com/raysan5/raylib/releases -> raylib-5.5_win64_mingw-w64.zip
+   -> extract, rename folder to raylib, move to C:\  (gives C:\raylib\include and C:\raylib\lib)
+3. In VS Code: Ctrl+Shift+B -> "Build raylib file (WinLibs GCC 14, ...)"
 
-# 2. Navigate into the cloned directory
-cd vcpkg
+Both options:
+- Red line under #include "raylib.h"? Click the config name at the bottom-right of VS Code
+  (when a .cpp is open) and pick the one matching your option. Then Ctrl+Shift+P -> Reload Window.
+- The build tasks build ONLY the file you have open (each .cpp here has its own main()).
+- Don't use vcpkg raylib:x64-windows: it needs Visual Studio and won't work with these MinGW tasks.
 
-# 3. Compile the vcpkg executable tool
-# On Windows:
-.\bootstrap-vcpkg.bat
-
-# On Linux / macOS:
-./bootstrap-vcpkg.sh
-
-install raylib command (Windows - powershell/terminal)
-.\vcpkg install raylib:x64-windows
-
-install raylib command (Ubuntu - powershell/terminal)
-sudo apt install libraylib-dev
-
-if needed integrate with vs code via 
-vcpkg integrate install
+Linux (Ubuntu): sudo apt install libraylib-dev
 
 
 n.n.n

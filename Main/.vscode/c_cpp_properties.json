@@ -1,19 +1,19 @@
 {
     "configurations": [
         {
-            "name": "Win32",
-            "includePath": [
-                "${workspaceFolder}/**",
-                "C:/raylib/**"
-            ],
-            "defines": [
-                "_DEBUG",
-                "UNICODE",
-                "_UNICODE"
-            ],
+            "name": "raylib installer (C:/raylib/w64devkit)",
+            "includePath": ["${workspaceFolder}/**", "C:/raylib/**"],
+            "defines": ["_DEBUG", "UNICODE", "_UNICODE"],
             "compilerPath": "C:/raylib/w64devkit/bin/g++.exe",
             "cStandard": "c17",
-            "cppStandard": "c++17",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "windows-gcc-x64"
+        },
+        {
+            "name": "WinLibs + raylib zip",
+            "includePath": ["${workspaceFolder}/**", "C:/raylib/include"],
+            "compilerPath": "C:/mingw64/bin/g++.exe",
+            "cppStandard": "c++20",
             "intelliSenseMode": "windows-gcc-x64"
         }
     ],
