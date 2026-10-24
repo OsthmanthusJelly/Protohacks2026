@@ -14,13 +14,13 @@ cd vcpkg
 ./bootstrap-vcpkg.sh
 
 install raylib command (Windows - powershell/terminal)
-> vcpkg install raylib:x64-windows
+.\vcpkg install raylib:x64-windows
 
 install raylib command (Ubuntu - powershell/terminal)
-> sudo apt install libraylib-dev
+sudo apt install libraylib-dev
 
 if needed integrate with vs code via 
-> vcpkg integrate install
+vcpkg integrate install
 
 
 n.n.n
