@@ -6,7 +6,6 @@
 #include <algorithm>
 
 
-// Struct to hold the state of the pet
 
 
 
@@ -57,16 +56,51 @@ Public:
     }
 };
 main(){
-    void ReadActivityLog(Pet& pet){
-        std::ifstream file("activity.log");
-        std::string line;
+    void ReadActivityLog(Pet& pet) {
+    std::ifstream file("activity.log");
+    std::string line;
+    
+    bool foundError = false;
+    std::string newAdvice = "";
+
+    // Read the file one line at a time
     while (std::getline(file, line)) {
-        if (line.find("COMPILE_ERROR") != std::string::npos) {
-            pet.health -= 10; // 10 damage per error
-            pet.currentMood = READING;
-            pet.currentAdvice = "Ouch! Compile error.";
-        } 
-        else if (line.find("COMPILE_SUCCESS") != std::string::npos) {
+        
+        if (line.find("COMPILE_SUCCESS") != std::string::npos) {
             pet.AddExp();
-            pet.currentAdvice = "Compiled perfectly!";
+            pet.currentAdvice = "Compiled perfectly! Good job.";
+            break; // Stop reading, we don't need to look for errors
         }
+        else if (line.find("COMPILE_ERROR") != std::string::npos) {
+            foundError = true;
+            pet.health -= 10;
+            pet.currentMood = READING;
+            newAdvice = "I don't recognize this error, check the terminal!"; // Default advice
+        }
+        
+        // If we know an error happened, start searching the compiler's text for clues
+        if (foundError) {
+            if (line.find("expected ';'") != std::string::npos) {
+                newAdvice = "Advice: You forgot a semicolon ';' at the end of a line!";
+            }
+            else if (line.find("was not declared") != std::string::npos || line.find("undeclared") != std::string::npos) {
+                newAdvice = "Advice: You typed a variable name that doesn't exist. Typo?";
+            }
+            else if (line.find("expected '}'") != std::string::npos) {
+                newAdvice = "Advice: You are missing a closing curly bracket '}'!";
+            }
+            else if (line.find("No such file or directory") != std::string::npos) {
+                newAdvice = "Advice: You are trying to #include a file that is missing.";
+            }
+        }
+    }
+    file.close();
+
+    // If we found an error while reading, update the pet's advice
+    if (foundError) {
+        pet.currentAdvice = newAdvice;
+    }
+    
+    // Empty the file so we don't read the same error on the next frame
+    std::ofstream clearFile("activity.log", std::ofstream::trunc);
+}}
