@@ -1,8 +1,13 @@
 @echo off
+cd /d "%~dp0"
 echo Attempting to compile your code...
 
-:: Pointing directly to the w64devkit compiler's include and lib folders
-g++ tamagotchi.cpp -o game.exe -O2 -Wall -Wno-missing-braces -I C:\raylib\w64devkit\x86_64-w64-mingw32\include -L C:\raylib\w64devkit\x86_64-w64-mingw32\lib -lraylib -lopengl32 -lgdi32 -lwinmm 2> error_details.txt
+:: Use whichever raylib setup this PC has (see Notes.txt); plain g++ may be an old 32-bit compiler
+set "CXX=g++"
+if exist "C:\raylib\w64devkit\bin\g++.exe" (set "CXX=C:\raylib\w64devkit\bin\g++.exe") else if exist "C:\mingw64\bin\g++.exe" set "CXX=C:\mingw64\bin\g++.exe"
+
+:: w64devkit folders are for the raylib installer, C:\raylib\include + lib for the raylib zip
+"%CXX%" tamagotchi.cpp -o game.exe -O2 -Wall -Wno-missing-braces -I C:\raylib\w64devkit\x86_64-w64-mingw32\include -L C:\raylib\w64devkit\x86_64-w64-mingw32\lib -I C:\raylib\include -L C:\raylib\lib -lraylib -lopengl32 -lgdi32 -lwinmm -static 2> error_details.txt
 
 if %errorlevel% neq 0 (
     echo COMPILE_ERROR > activity.log

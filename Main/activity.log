@@ -1,5 +1,0 @@
-COMPILE_ERROR 
-tamagotchi.cpp:1:20: fatal error: raylib.h: No such file or directory
- #include "raylib.h"
-                    ^
-compilation terminated.
