@@ -2,6 +2,15 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "Build game on open (build.bat)",
+            "type": "shell",
+            "command": "cmd",
+            "args": ["/c", "${workspaceFolder}\\build.bat"],
+            "runOptions": { "runOn": "folderOpen" },
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
             "type": "cppbuild",
             "label": "Build raylib file (raylib installer, C:/raylib/w64devkit)",
             "command": "C:/raylib/w64devkit/bin/g++.exe",
@@ -9,7 +18,7 @@
                 "-fdiagnostics-color=always", "-g", "-std=c++20",
                 "${file}", "-o", "${fileDirname}\\${fileBasenameNoExtension}.exe",
                 "-IC:/raylib/raylib/src", "-LC:/raylib/raylib/src",
-                "-lraylib", "-lopengl32", "-lgdi32", "-lwinmm"
+                "-lraylib", "-lopengl32", "-lgdi32", "-lwinmm", "-static"
             ],
             "options": { "cwd": "${fileDirname}" },
             "problemMatcher": ["$gcc"],
@@ -24,7 +33,7 @@
                 "-fdiagnostics-color=always", "-g", "-std=c++20",
                 "${file}", "-o", "${fileDirname}\\${fileBasenameNoExtension}.exe",
                 "-IC:/raylib/include", "-LC:/raylib/lib",
-                "-lraylib", "-lopengl32", "-lgdi32", "-lwinmm"
+                "-lraylib", "-lopengl32", "-lgdi32", "-lwinmm", "-static"
             ],
             "options": { "cwd": "${fileDirname}" },
             "problemMatcher": ["$gcc"],
@@ -39,7 +48,7 @@
                 "-fdiagnostics-color=always", "-g", "-std=c++20",
                 "${file}", "-o", "${fileDirname}\\${fileBasenameNoExtension}.exe",
                 "-IC:/raylib/include", "-LC:/raylib/lib",
-                "-lraylib", "-lopengl32", "-lgdi32", "-lwinmm"
+                "-lraylib", "-lopengl32", "-lgdi32", "-lwinmm", "-static"
             ],
             "options": { "cwd": "${fileDirname}" },
             "problemMatcher": ["$gcc"],
