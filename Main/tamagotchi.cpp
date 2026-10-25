@@ -12,9 +12,12 @@
 #include <regex>
 #include <random>
 
-// Two Windows functions for the one-pet-at-a-time check (windows.h itself clashes with raylib's names)
+// A few Windows functions (windows.h itself clashes with raylib's names): the one-pet-at-a-time check,
+// and the cursor's position on the screen for dragging the wandering pet around
 extern "C" __declspec(dllimport) void* __stdcall CreateMutexA(void* attributes, int initialOwner, const char* name);
 extern "C" __declspec(dllimport) unsigned long __stdcall GetLastError();
+struct ScreenPoint { long x, y; };
+extern "C" __declspec(dllimport) int __stdcall GetCursorPos(ScreenPoint* point);
 
 enum Mood {
     HAPPY,
@@ -27,7 +30,7 @@ enum Mood {
 // shortcut: hunger drops every minute for testing, set HUNGER_EVERY to 3600 (1 hour) for real play.
 const float TOKEN_EVERY = 60.0f;  // 1 token for every minute the pet is open
 const float HUNGER_EVERY = 60.0f;
-const int HUNGER_DROP = 10;       // hunger lost each time
+const int HUNGER_DROP = 1;        // hunger lost each time (1 per minute)
 const float IDLE_EVERY = 20.0f;   // quiet time before the pet says something on its own
 const int CLOTHES_COUNT = 40;
 const int WISH_COST = 10, WISH10_COST = 90; // the prices printed on the wish buttons in UI.jpg
@@ -699,15 +702,15 @@ void DrawSpeechBubble(const Sprites& art, const Pet& pet, float centerX, float b
         DrawText(lines[i].c_str(), (int)(box.x + padX), (int)(box.y + padTop + i * lineHeight), fontSize, isError ? MAROON : DARKGRAY);
 }
 
-// The pet in its outfit (or its mood animation) at `at`, `k` times its normal size
-void DrawPet(const Sprites& art, const Pet& pet, Vector2 at, float k, float t, float squash, bool flip) {
+// The pet in its outfit (or its mood animation) at `at`, `k` times its normal size, tilted by `rotation` degrees
+void DrawPet(const Sprites& art, const Pet& pet, Vector2 at, float k, float t, float squash, bool flip, float rotation = 0.0f) {
     int fit = pet.equipped >= 0 && pet.myMOOD != READING && !art.clothes.empty() ? pet.equipped : -1;
     Wear wear = fit >= 0 ? CLOTHES[fit].wear : WORN;
     float side = flip ? -1.0f : 1.0f;
     if (fit >= 0 && wear == AURA) DrawSprite(art.clothes, fit, at, 280 * k, sinf(t) * 5, Fade(WHITE, 0.85f), 1, flip);
     if (fit >= 0 && wear == WORN)
-        DrawSprite(art.clothes, fit, at, std::min(260.0f, art.clothes[fit].height * 2.6f) * k, 0, WHITE, squash, flip);
-    else DrawSprite(art.mood[pet.myMOOD], (int)(t * 6), at, 200 * k, 0, WHITE, squash, flip);
+        DrawSprite(art.clothes, fit, at, std::min(260.0f, art.clothes[fit].height * 2.6f) * k, rotation, WHITE, squash, flip);
+    else DrawSprite(art.mood[pet.myMOOD], (int)(t * 6), at, 200 * k, rotation, WHITE, squash, flip);
     if (fit >= 0 && wear == HELD) DrawSprite(art.clothes, fit, { at.x + 125 * k * side, at.y + (25 + sinf(t * 2) * 6) * k }, 110 * k, 0, WHITE, 1, flip);
     if (fit >= 0 && wear == HAT) DrawSprite(art.clothes, fit, { at.x, at.y - 68 * k }, 64 * k);
 }
@@ -794,8 +797,8 @@ int SelfTest() {
       check(p.tokens == 1, "1 free token after 1 minute"); }
 
     { Pet p; p.Update(HUNGER_EVERY);
-      check(p.hunger == 90, "hunger drops by 10 each tick");
-      p.hunger = 10; p.Update(HUNGER_EVERY);
+      check(p.hunger == 99, "hunger drops by 1 each minute");
+      p.hunger = 1; p.Update(HUNGER_EVERY);
       check(p.hunger == 0 && p.health == 9, "starving (hunger 0) costs a heart"); }
 
     { Pet p; p.hunger = 50; p.health = 8;
@@ -860,7 +863,7 @@ int main(int argc, char** argv) {
     // The game is drawn at 800x600 and scaled to fit.
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_TRANSPARENT | FLAG_WINDOW_TOPMOST);
     InitWindow(400, 300, "Tamagothu: The Dev Pet");
-    SetWindowMinSize(200, 150);
+    SetWindowMinSize(180, 135); // small enough for wander mode
     SetExitKey(KEY_NULL); // Esc shouldn't close the game while you're typing a name or password
     SetTargetFPS(60);
     RenderTexture2D screen = LoadRenderTexture(800, 600);
@@ -886,15 +889,16 @@ int main(int argc, char** argv) {
     float hurtShake = 0.0f, coinPop = 0.0f, eatTimer = 0.0f, pokeTimer = 0.0f, wishFlash = 0.0f, deathTimer = 0.0f;
     int eatenFood = 0;
     const Rectangle shopButton = { 20, 470, 120, 120 };
-    const Rectangle shopPanel = { 90, 90, 620, 420 };
-    auto foodCell = [&](int i) { return Rectangle{ shopPanel.x + 15 + (i % 4) * 150.0f, shopPanel.y + 85 + (i / 4) * 160.0f, 140, 150 }; };
+    const Rectangle shopPanel = { 20, 20, 760, 560 };
+    auto foodCell = [&](int i) { return Rectangle{ shopPanel.x + 15 + (i % 4) * 183.0f, shopPanel.y + 95 + (i / 4) * 225.0f, 177, 215 }; };
 
     // Wander mode: the window shrinks to just the pet, loses its frame, and walks along the bottom of the screen
-    const int WANDER_W = 280, WANDER_H = 210;
-    bool wandering = false, facingLeft = false;
-    Vector2 homePos = {};
+    const int WANDER_W = 187, WANDER_H = 140;
+    bool wandering = false, facingLeft = false, held = false, pressedOnPet = false;
+    Vector2 homePos = {}, grab = {}, pressAt = {};
     int homeW = 0, homeH = 0;
-    float walkX = 0, walkTarget = 0, walkPause = 0, bubbleTimer = 0;
+    float walkX = 0, walkY = -1, walkTarget = 0, walkPause = 0, bubbleTimer = 0; // walkY stays where you last dropped it
+    double lastTap = -1;
     std::string lastAdvice = myPet.currentAdvice;
     auto startWandering = [&]() {
         homePos = GetWindowPosition();
@@ -906,10 +910,11 @@ int main(int argc, char** argv) {
         walkPause = 1.0f;
         wandering = true;
         screenNow = MAIN;
-        myPet.Say("I'm going for a walk! Click me to bring me back.");
+        myPet.Say("I'm going for a walk! Drag me around, double-click to bring me back.");
     };
     auto stopWandering = [&]() {
         ClearWindowState(FLAG_WINDOW_UNDECORATED); // stays always-on-top
+        held = pressedOnPet = false;
         SetWindowSize(homeW, homeH);
         SetWindowPosition((int)homePos.x, (int)homePos.y);
         wandering = false;
@@ -964,17 +969,49 @@ int main(int argc, char** argv) {
         if (wandering) {
             int monitor = GetCurrentMonitor();
             Vector2 mon = GetMonitorPosition(monitor);
-            if (walkPause > 0) walkPause -= realDt;
-            else {
-                float step = 70 * realDt;
-                facingLeft = walkTarget < walkX;
-                walkX += std::clamp(walkTarget - walkX, -step, step);
-                if (fabsf(walkTarget - walkX) < 1) { // arrived: rest a bit, then pick a new spot
-                    walkPause = (float)GetRandomValue(2, 6);
-                    walkTarget = mon.x + GetRandomValue(0, GetMonitorWidth(monitor) - WANDER_W);
+            if (walkY < 0) walkY = mon.y + GetMonitorHeight(monitor) - WANDER_H - 48; // first walk: just above the taskbar
+
+            // Drag to pick the pet up, drop it to set the height it walks at, double-click to send it home.
+            // Dragging uses the cursor's screen position from Windows: the window moves under the mouse,
+            // so a position relative to the window would make it run away.
+            ScreenPoint p = {};
+            GetCursorPos(&p);
+            Vector2 win = GetWindowPosition(), cursor = { (float)p.x, (float)p.y };
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(), { 200, 200, 400, 400 })) {
+                pressedOnPet = true;
+                pressAt = cursor;
+                grab = { cursor.x - win.x, cursor.y - win.y };
+            }
+            if (pressedOnPet && !held && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && fabsf(cursor.x - pressAt.x) + fabsf(cursor.y - pressAt.y) > 6) {
+                held = true;
+                myPet.Say("Wheee! Put me down!");
+            }
+            if (held) { walkX = cursor.x - grab.x; walkY = cursor.y - grab.y; }
+            if (pressedOnPet && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+                pressedOnPet = false;
+                if (held) {
+                    held = false;
+                    walkTarget = walkX;
+                    walkPause = 2.0f;
+                    myPet.Say("I'll walk here now!");
+                }
+                else if (GetTime() - lastTap < 0.4) stopWandering(); // second click of a double-click
+                else lastTap = GetTime();
+            }
+
+            if (!held) {
+                if (walkPause > 0) walkPause -= realDt;
+                else {
+                    float step = 70 * realDt;
+                    facingLeft = walkTarget < walkX;
+                    walkX += std::clamp(walkTarget - walkX, -step, step);
+                    if (fabsf(walkTarget - walkX) < 1) { // arrived: rest a bit, then pick a new spot
+                        walkPause = (float)GetRandomValue(2, 6);
+                        walkTarget = mon.x + GetRandomValue(0, GetMonitorWidth(monitor) - WANDER_W);
+                    }
                 }
             }
-            SetWindowPosition((int)walkX, (int)(mon.y + GetMonitorHeight(monitor) - WANDER_H - 48)); // 48: above the taskbar
+            if (wandering) SetWindowPosition((int)walkX, (int)walkY);
         }
 
         // A click on the main screen only counts when no window is open on top of it.
@@ -990,13 +1027,12 @@ int main(int argc, char** argv) {
         rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
         BeginBlendMode(BLEND_CUSTOM_SEPARATE);
         if (wandering) {
-            // Just the pet, big and hopping while it walks, with a short-lived speech bubble; click it to bring it home
-            bool walking = walkPause <= 0;
-            float hop = walking ? -fabsf(sinf(t * 9.0f)) * 30.0f : sinf(t * 3.0f) * 10.0f;
-            float squash = 1.0f + 0.25f * sinf(pokeTimer / 0.4f * PI);
-            DrawPet(art, myPet, { 400, 390 + hop }, 1.9f, t, squash, facingLeft);
+            // Just the pet, big and hopping while it walks (wiggling while held), with a short-lived speech bubble
+            bool walking = walkPause <= 0 && !held;
+            float hop = walking ? -fabsf(sinf(t * 9.0f)) * 30.0f : held ? 0.0f : sinf(t * 3.0f) * 10.0f;
+            float wiggle = held ? sinf(t * 18.0f) * 18.0f : 0.0f;
+            DrawPet(art, myPet, { 400, 390 + hop }, 1.9f, t, held ? 0.9f : 1.0f, facingLeft, wiggle);
             if (bubbleTimer > 0) DrawSpeechBubble(art, myPet, 400, 200, 44, 740, 2);
-            if (Clicked({ 200, 200, 400, 400 })) stopWandering();
         }
         else {
             DrawRectangleRounded({ 4, 4, 792, 592 }, 0.06f, 8, Color{ 43, 47, 56, 150 }); // tinted glass behind the pet
@@ -1116,20 +1152,20 @@ int main(int argc, char** argv) {
             if (screenNow == SHOP) {
                 Panel(shopPanel, GOLD);
                 Text("SHOP", shopPanel.x + 20, shopPanel.y + 15, 32, GOLD);
-                Text(TextFormat("You have %i tokens. Click food to feed me!", myPet.tokens), shopPanel.x + 20, shopPanel.y + 55, 18, RAYWHITE);
+                Text(TextFormat("You have %i tokens. Click food to feed me!", myPet.tokens), shopPanel.x + 20, shopPanel.y + 55, 22, RAYWHITE);
                 if (Button({ shopPanel.x + shopPanel.width - 110, shopPanel.y + 14, 95, 34 }, "Close", DARKGRAY, 18)) screenNow = MAIN;
                 for (int i = 0; i < 8; i++) {
                     Rectangle cell = foodCell(i);
                     bool canAfford = myPet.tokens >= FOODS[i].price;
                     if (CheckCollisionPointRec(GetMousePosition(), cell)) DrawRectangleRounded(cell, 0.1f, 6, Fade(GOLD, 0.15f));
                     float cx = cell.x + cell.width / 2;
-                    DrawSprite(art.food, i, { cx, cell.y + 40 }, 64);
-                    TextCentered(FOODS[i].name, cx, cell.y + 80, 20, RAYWHITE);
-                    TextCentered(TextFormat("%i token%s", FOODS[i].price, FOODS[i].price == 1 ? "" : "s"), cx, cell.y + 104, 18, canAfford ? GOLD : GRAY);
-                    std::string fills = TextFormat("+%i food", FOODS[i].hunger);
-                    if (FOODS[i].hearts) fills += " +1 heart";
-                    if (FOODS[i].exp) fills += " +1 EXP";
-                    TextCentered(fills.c_str(), cx, cell.y + 126, FOODS[i].exp ? 14 : 16, GREEN);
+                    // Big text so it stays readable when the window is small
+                    DrawSprite(art.food, i, { cx, cell.y + 48 }, 80);
+                    TextCentered(FOODS[i].name, cx, cell.y + 96, 28, RAYWHITE);
+                    TextCentered(TextFormat("%i token%s", FOODS[i].price, FOODS[i].price == 1 ? "" : "s"), cx, cell.y + 128, 24, canAfford ? GOLD : GRAY);
+                    TextCentered(TextFormat("+%i food", FOODS[i].hunger), cx, cell.y + 156, 20, GREEN);
+                    std::string extra = std::string(FOODS[i].hearts ? "+1 heart " : "") + (FOODS[i].exp ? "+1 EXP" : "");
+                    if (!extra.empty()) TextCentered(extra.c_str(), cx, cell.y + 178, 20, GREEN);
                     if (Clicked(cell) && Buy(myPet, FOODS[i])) {
                         eatenFood = i;
                         eatTimer = 1.0f;
