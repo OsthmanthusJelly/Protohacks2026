@@ -12,6 +12,10 @@
 #include <regex>
 #include <random>
 
+// Two Windows functions for the one-pet-at-a-time check (windows.h itself clashes with raylib's names)
+extern "C" __declspec(dllimport) void* __stdcall CreateMutexA(void* attributes, int initialOwner, const char* name);
+extern "C" __declspec(dllimport) unsigned long __stdcall GetLastError();
+
 enum Mood {
     HAPPY,
     SAD,
@@ -614,14 +618,14 @@ Sprites LoadSprites() {
 
 // ---------- DRAWING HELPERS ----------
 // Draw frame i of an animation centred on `center`, scaled to `height` pixels tall.
-// squash > 1 makes it wider and shorter (for pokes).
+// squash > 1 makes it wider and shorter (for pokes); flip mirrors it left-right.
 void DrawSprite(const std::vector<Texture2D>& frames, int i, Vector2 center, float height,
-                float rotation = 0.0f, Color tint = WHITE, float squash = 1.0f) {
+                float rotation = 0.0f, Color tint = WHITE, float squash = 1.0f, bool flip = false) {
     if (frames.empty() || height <= 0) return; // sheet missing: the text still shows
     const Texture2D& tex = frames[i % frames.size()];
     float width = height * tex.width / tex.height * squash;
     height /= squash;
-    DrawTexturePro(tex, { 0, 0, (float)tex.width, (float)tex.height },
+    DrawTexturePro(tex, { 0, 0, flip ? -(float)tex.width : (float)tex.width, (float)tex.height },
                    { center.x, center.y, width, height }, { width / 2, height / 2 }, rotation, tint);
 }
 
@@ -665,17 +669,22 @@ std::vector<std::string> WrapText(const std::string& text, int fontSize, int max
 }
 
 // Speech bubble whose bottom edge sits at `bottom`, centred on `centerX`
-void DrawSpeechBubble(const Sprites& art, const Pet& pet, float centerX, float bottom) {
-    std::vector<std::string> lines = WrapText(pet.currentAdvice, 20, 460);
+void DrawSpeechBubble(const Sprites& art, const Pet& pet, float centerX, float bottom,
+                      int fontSize = 20, int maxWidth = 460, size_t maxLines = 99) {
+    std::vector<std::string> lines = WrapText(pet.currentAdvice, fontSize, maxWidth);
     if (lines.empty()) return;
-    int textWidth = 0;
-    for (auto& l : lines) textWidth = std::max(textWidth, MeasureText(l.c_str(), 20));
+    if (lines.size() > maxLines) {
+        lines.resize(maxLines);
+        lines.back() += "...";
+    }
+    int textWidth = 0, lineHeight = fontSize + 4;
+    for (auto& l : lines) textWidth = std::max(textWidth, MeasureText(l.c_str(), fontSize));
 
     // 9-slice so the bubble's corners (and the white bubble's tail) keep their shape at any size
     bool isError = pet.adviceIsError;
     const std::vector<Texture2D>& frames = isError ? art.alert : art.bubble;
     float padX = isError ? 26.0f : 22.0f, padTop = isError ? 20.0f : 14.0f, padBottom = isError ? 20.0f : 30.0f;
-    Rectangle box = { 0, 0, textWidth + 2 * padX, lines.size() * 24.0f + padTop + padBottom };
+    Rectangle box = { 0, 0, textWidth + 2 * padX, lines.size() * (float)lineHeight + padTop + padBottom };
     box.x = centerX - box.width / 2;
     box.y = bottom - box.height;
     if (!frames.empty()) {
@@ -687,7 +696,20 @@ void DrawSpeechBubble(const Sprites& art, const Pet& pet, float centerX, float b
     else DrawRectangleRounded(box, 0.3f, 8, RAYWHITE);
 
     for (size_t i = 0; i < lines.size(); i++)
-        DrawText(lines[i].c_str(), (int)(box.x + padX), (int)(box.y + padTop + i * 24), 20, isError ? MAROON : DARKGRAY);
+        DrawText(lines[i].c_str(), (int)(box.x + padX), (int)(box.y + padTop + i * lineHeight), fontSize, isError ? MAROON : DARKGRAY);
+}
+
+// The pet in its outfit (or its mood animation) at `at`, `k` times its normal size
+void DrawPet(const Sprites& art, const Pet& pet, Vector2 at, float k, float t, float squash, bool flip) {
+    int fit = pet.equipped >= 0 && pet.myMOOD != READING && !art.clothes.empty() ? pet.equipped : -1;
+    Wear wear = fit >= 0 ? CLOTHES[fit].wear : WORN;
+    float side = flip ? -1.0f : 1.0f;
+    if (fit >= 0 && wear == AURA) DrawSprite(art.clothes, fit, at, 280 * k, sinf(t) * 5, Fade(WHITE, 0.85f), 1, flip);
+    if (fit >= 0 && wear == WORN)
+        DrawSprite(art.clothes, fit, at, std::min(260.0f, art.clothes[fit].height * 2.6f) * k, 0, WHITE, squash, flip);
+    else DrawSprite(art.mood[pet.myMOOD], (int)(t * 6), at, 200 * k, 0, WHITE, squash, flip);
+    if (fit >= 0 && wear == HELD) DrawSprite(art.clothes, fit, { at.x + 125 * k * side, at.y + (25 + sinf(t * 2) * 6) * k }, 110 * k, 0, WHITE, 1, flip);
+    if (fit >= 0 && wear == HAT) DrawSprite(art.clothes, fit, { at.x, at.y - 68 * k }, 64 * k);
 }
 
 // Immediate-mode buttons: a click is used by the first button under the mouse
@@ -830,8 +852,13 @@ enum Screen { MAIN, SHOP, GACHA, WARDROBE, PERSONALITIES_MENU, DEV_LOGIN, DEV };
 int main(int argc, char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--selftest") return SelfTest();
 
-    // 1. Create the Raylib window: small, see-through, resizable. The game is drawn at 800x600 and scaled to fit.
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_TRANSPARENT);
+    // Only one pet at a time: two would fight over activity.log, and VS Code may try to open a second one
+    CreateMutexA(nullptr, 0, "Tamagothu_one_pet");
+    if (GetLastError() == 183) return 0; // ERROR_ALREADY_EXISTS
+
+    // 1. Create the Raylib window: small, see-through, resizable, always on top of other windows.
+    // The game is drawn at 800x600 and scaled to fit.
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_TRANSPARENT | FLAG_WINDOW_TOPMOST);
     InitWindow(400, 300, "Tamagothu: The Dev Pet");
     SetWindowMinSize(200, 150);
     SetExitKey(KEY_NULL); // Esc shouldn't close the game while you're typing a name or password
@@ -861,6 +888,32 @@ int main(int argc, char** argv) {
     const Rectangle shopButton = { 20, 470, 120, 120 };
     const Rectangle shopPanel = { 90, 90, 620, 420 };
     auto foodCell = [&](int i) { return Rectangle{ shopPanel.x + 15 + (i % 4) * 150.0f, shopPanel.y + 85 + (i / 4) * 160.0f, 140, 150 }; };
+
+    // Wander mode: the window shrinks to just the pet, loses its frame, and walks along the bottom of the screen
+    const int WANDER_W = 280, WANDER_H = 210;
+    bool wandering = false, facingLeft = false;
+    Vector2 homePos = {};
+    int homeW = 0, homeH = 0;
+    float walkX = 0, walkTarget = 0, walkPause = 0, bubbleTimer = 0;
+    std::string lastAdvice = myPet.currentAdvice;
+    auto startWandering = [&]() {
+        homePos = GetWindowPosition();
+        homeW = GetScreenWidth();
+        homeH = GetScreenHeight();
+        SetWindowState(FLAG_WINDOW_UNDECORATED);
+        SetWindowSize(WANDER_W, WANDER_H);
+        walkX = walkTarget = homePos.x;
+        walkPause = 1.0f;
+        wandering = true;
+        screenNow = MAIN;
+        myPet.Say("I'm going for a walk! Click me to bring me back.");
+    };
+    auto stopWandering = [&]() {
+        ClearWindowState(FLAG_WINDOW_UNDECORATED); // stays always-on-top
+        SetWindowSize(homeW, homeH);
+        SetWindowPosition((int)homePos.x, (int)homePos.y);
+        wandering = false;
+    };
 
     // 3. Start the infinite game loop
     while (!WindowShouldClose()) {
@@ -904,8 +957,30 @@ int main(int argc, char** argv) {
         deathTimer = myPet.IsDead() ? deathTimer + realDt : 0.0f;
         float t = (float)GetTime();
 
-        // A click on the main screen only counts when no window is open on top of it
+        // While wandering, the speech bubble only pops up for a few seconds after the pet says something new
+        if (myPet.currentAdvice != lastAdvice) { lastAdvice = myPet.currentAdvice; bubbleTimer = 6.0f; }
+        bubbleTimer = std::max(0.0f, bubbleTimer - realDt);
+        if (wandering && myPet.IsDead()) stopWandering(); // come home so the death screen shows
+        if (wandering) {
+            int monitor = GetCurrentMonitor();
+            Vector2 mon = GetMonitorPosition(monitor);
+            if (walkPause > 0) walkPause -= realDt;
+            else {
+                float step = 70 * realDt;
+                facingLeft = walkTarget < walkX;
+                walkX += std::clamp(walkTarget - walkX, -step, step);
+                if (fabsf(walkTarget - walkX) < 1) { // arrived: rest a bit, then pick a new spot
+                    walkPause = (float)GetRandomValue(2, 6);
+                    walkTarget = mon.x + GetRandomValue(0, GetMonitorWidth(monitor) - WANDER_W);
+                }
+            }
+            SetWindowPosition((int)walkX, (int)(mon.y + GetMonitorHeight(monitor) - WANDER_H - 48)); // 48: above the taskbar
+        }
+
+        // A click on the main screen only counts when no window is open on top of it.
+        // Windows on top only get clicks if they were already open, so the click that opens one can't also close it.
         bool click = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+        Screen screenBefore = screenNow;
         g_click = click && screenNow == MAIN;
 
         // 4. DRAWING PHASE
@@ -914,327 +989,331 @@ int main(int argc, char** argv) {
         // Keep the alpha channel correct for the see-through window
         rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
         BeginBlendMode(BLEND_CUSTOM_SEPARATE);
-        DrawRectangleRounded({ 4, 4, 792, 592 }, 0.06f, 8, Color{ 43, 47, 56, 150 }); // tinted glass behind the pet
-
-        // Hearts: 10 hearts, each worth a tenth of max health. They shake when hurt and beat when low.
-        float perHeart = myPet.maxHealth / 10.0f;
-        bool lowHealth = myPet.health <= myPet.maxHealth * 0.3f;
-        for (int i = 0; i < 10; i++) {
-            float fill = (myPet.health - i * perHeart) / perHeart;
-            int frame = fill >= 0.875f ? 0 : fill >= 0.5f ? 1 : fill > 0.0f ? 2 : 3;
-            float beat = lowHealth ? 1.0f + 0.15f * std::max(0.0f, sinf(t * 8.0f)) : 1.0f;
-            float shake = hurtShake > 0 ? (float)GetRandomValue(-4, 4) : 0.0f;
-            DrawSprite(art.hearts, frame, { 28 + i * 36.0f + shake, 30 }, 30 * beat);
-        }
-        Text(TextFormat("%i / %i", myPet.health, myPet.maxHealth), 380, 20, 20, RED);
-
-        // Token: spinning coin that bounces when you earn one
-        float pop = 1.0f + 0.5f * sinf(coinPop / 0.4f * PI);
-        DrawSprite(art.coin, (int)(t * 10), { 690, 30 }, 36 * pop);
-        Text(TextFormat("x %i", myPet.tokens), 715, 18, 24, GOLD);
-
-        // Name (click to rename) and level
-        Rectangle nameBox = { 10, 56, 300, 28 };
-        if (editingName) {
-            DrawRectangleRounded(nameBox, 0.3f, 6, Fade(BLACK, 0.6f));
-            Text(TextFormat("%s%s", myPet.name.c_str(), fmodf(t, 1.0f) < 0.5f ? "_" : ""), nameBox.x + 6, nameBox.y + 4, 20, GOLD);
-            Text("Enter to save", nameBox.x + nameBox.width + 8, nameBox.y + 6, 16, GRAY);
-            if (TypeInto(myPet.name, 16) || (click && !CheckCollisionPointRec(GetMousePosition(), nameBox))) {
-                if (myPet.name.empty()) myPet.name = "Tamagothu";
-                editingName = false;
-                myPet.Say("Call me " + myPet.name + "!");
-            }
-        }
-        else {
-            const char* label = TextFormat("%s  Lv %i", myPet.name.c_str(), myPet.level);
-            bool hover = CheckCollisionPointRec(GetMousePosition(), nameBox) && screenNow == MAIN;
-            Text(label, nameBox.x + 6, nameBox.y + 4, 20, hover ? GOLD : RAYWHITE);
-            if (hover) Text("(click to rename)", nameBox.x + 12 + MeasureText(label, 20), nameBox.y + 7, 14, GRAY);
-            if (Clicked(nameBox)) editingName = true;
-        }
-        Text(TextFormat("EXP: %i / %i", myPet.exp, myPet.maxExp), 16, 88, 20, SKYBLUE);
-
-        // Hunger bar with the amount written on it
-        Text("Food", 540, 62, 20, RAYWHITE);
-        Rectangle hungerBar = { 600, 60, 185, 24 };
-        float full = (float)myPet.hunger / myPet.maxHunger;
-        Color hungerColor = full > 0.5f ? GREEN : full > 0.25f ? ORANGE : RED;
-        DrawRectangleRec(hungerBar, Color{ 20, 22, 28, 220 });
-        DrawRectangle((int)hungerBar.x, (int)hungerBar.y, (int)(hungerBar.width * full), (int)hungerBar.height, hungerColor);
-        DrawRectangleLinesEx(hungerBar, 2, BLACK);
-        TextCentered(TextFormat("%i / %i", myPet.hunger, myPet.maxHunger), hungerBar.x + hungerBar.width / 2, hungerBar.y + 4, 18, RAYWHITE);
-
-        const Vector2 petCenter = { 400, 330 };
-        if (myPet.IsDead()) {
-            // Death: the pet keels over and fades, the tombstone rises, then its ghost floats up
-            float d = deathTimer;
-            if (d < 1.5f) {
-                float k = d / 1.5f;
-                DrawSprite(art.mood[SAD], 0, { petCenter.x, petCenter.y + k * 40 }, 200 * (1 - 0.4f * k), 90 * k, Fade(GRAY, 1 - k));
-            }
-            float rise = std::clamp((d - 1.0f) / 1.0f, 0.0f, 1.0f);
-            rise = 1 - (1 - rise) * (1 - rise); // ease out
-            DrawSprite(art.tombstone, 0, { petCenter.x - 20, 640 - rise * 260 }, 220);
-            if (d > 1.8f) {
-                float g = std::min(1.0f, (d - 1.8f) / 1.0f);
-                DrawSprite(art.ghost, 0, { petCenter.x + 90, 260 - g * 40 + sinf(t * 2) * 8 }, 110, sinf(t * 1.5f) * 8, Fade(WHITE, g * 0.9f));
-            }
-            if (d > 2.5f) {
-                TextCentered(TextFormat("%s crashed for good...", myPet.name.c_str()), 400, 120, 28, RAYWHITE);
-                if (Button({ 285, 160, 230, 46 }, "Revive (lose all tokens)", MAROON, 18)) myPet.Revive();
-            }
-        }
-        else {
-            // Character: its outfit (or the mood animation), bobbing gently; angry trembles, pokes squish, eating bounces
-            float bob = myPet.myMOOD == ANGRY ? (float)GetRandomValue(-3, 3) : sinf(t * 3.0f) * 8.0f;
-            if (eatTimer > 0) bob = -fabsf(sinf(eatTimer * 12.0f)) * 12.0f;
+        if (wandering) {
+            // Just the pet, big and hopping while it walks, with a short-lived speech bubble; click it to bring it home
+            bool walking = walkPause <= 0;
+            float hop = walking ? -fabsf(sinf(t * 9.0f)) * 30.0f : sinf(t * 3.0f) * 10.0f;
             float squash = 1.0f + 0.25f * sinf(pokeTimer / 0.4f * PI);
-            Vector2 at = { petCenter.x, petCenter.y + bob };
-            int fit = myPet.equipped >= 0 && myPet.myMOOD != READING && !art.clothes.empty() ? myPet.equipped : -1;
-            Wear wear = fit >= 0 ? CLOTHES[fit].wear : WORN;
-            if (fit >= 0 && wear == AURA) DrawSprite(art.clothes, fit, at, 280, sinf(t) * 5, Fade(WHITE, 0.85f));
-            if (fit >= 0 && wear == WORN)
-                DrawSprite(art.clothes, fit, at, std::min(260.0f, art.clothes[fit].height * 2.6f), 0, WHITE, squash);
-            else DrawSprite(art.mood[myPet.myMOOD], (int)(t * 6), at, 200, 0, WHITE, squash);
-            if (fit >= 0 && wear == HELD) DrawSprite(art.clothes, fit, { at.x + 125, at.y + 25 + sinf(t * 2) * 6 }, 110);
-            if (fit >= 0 && wear == HAT) DrawSprite(art.clothes, fit, { at.x, at.y - 68 }, 64);
-
-            // Food being eaten: shrinks into the pet's mouth
-            if (eatTimer > 0) DrawSprite(art.food, eatenFood, { 400, 370 }, 70 * eatTimer);
-
-            // Poke the pet
-            if (Clicked({ petCenter.x - 100, petCenter.y - 100, 200, 200 })) {
-                myPet.Poke();
-                pokeTimer = 0.4f;
-            }
-
-            // Mood and personality
-            const char* moodNames[] = { "Happy", "Sad", "Angry", "Reading your error..." };
-            const Color moodColors[] = { GREEN, SKYBLUE, RED, YELLOW };
-            TextCentered(TextFormat("Mood: %s", moodNames[myPet.myMOOD]), 400, 438, 22, moodColors[myPet.myMOOD]);
-            TextCentered(TextFormat("(%s)", PERSONALITIES[myPet.personality].name), 400, 462, 16, GRAY);
-
-            // Speech bubble with the pet's advice (red for errors)
-            DrawSpeechBubble(art, myPet, 400, 215);
-
-            // Bottom buttons
-            bool overShop = CheckCollisionPointRec(GetMousePosition(), shopButton) && screenNow == MAIN;
-            DrawSprite(art.shop, 0, { shopButton.x + 60, shopButton.y + 55 }, overShop ? 100.0f : 90.0f);
-            if (Clicked(shopButton)) screenNow = SHOP;
-            if (Button({ 160, 530, 120, 48 }, "Wish", Color{ 170, 120, 20, 255 })) screenNow = GACHA;
-            if (Button({ 290, 530, 150, 48 }, "Wardrobe", Color{ 70, 90, 160, 255 })) screenNow = WARDROBE;
-            if (Button({ 450, 530, 160, 48 }, "Personality", Color{ 140, 60, 120, 255 })) screenNow = PERSONALITIES_MENU;
+            DrawPet(art, myPet, { 400, 390 + hop }, 1.9f, t, squash, facingLeft);
+            if (bubbleTimer > 0) DrawSpeechBubble(art, myPet, 400, 200, 44, 740, 2);
+            if (Clicked({ 200, 200, 400, 400 })) stopWandering();
         }
+        else {
+            DrawRectangleRounded({ 4, 4, 792, 592 }, 0.06f, 8, Color{ 43, 47, 56, 150 }); // tinted glass behind the pet
 
-        // Dev key
-        Rectangle devButton = { 700, 528, 87, 50 };
-        if (art.devKey.id) DrawTextureEx(art.devKey, { devButton.x, devButton.y }, 0, 1, WHITE);
-        else Button(devButton, "DEV", DARKGRAY);
-        if (Clicked(devButton)) { screenNow = devUnlocked ? DEV : DEV_LOGIN; password.clear(); devMessage.clear(); }
+            // Hearts: 10 hearts, each worth a tenth of max health. They shake when hurt and beat when low.
+            float perHeart = myPet.maxHealth / 10.0f;
+            bool lowHealth = myPet.health <= myPet.maxHealth * 0.3f;
+            for (int i = 0; i < 10; i++) {
+                float fill = (myPet.health - i * perHeart) / perHeart;
+                int frame = fill >= 0.875f ? 0 : fill >= 0.5f ? 1 : fill > 0.0f ? 2 : 3;
+                float beat = lowHealth ? 1.0f + 0.15f * std::max(0.0f, sinf(t * 8.0f)) : 1.0f;
+                float shake = hurtShake > 0 ? (float)GetRandomValue(-4, 4) : 0.0f;
+                DrawSprite(art.hearts, frame, { 28 + i * 36.0f + shake, 30 }, 30 * beat);
+            }
+            Text(TextFormat("%i / %i", myPet.health, myPet.maxHealth), 380, 20, 20, RED);
 
-        // ---------- WINDOWS ON TOP ----------
-        g_click = click && screenNow != MAIN;
+            // Token: spinning coin that bounces when you earn one
+            float pop = 1.0f + 0.5f * sinf(coinPop / 0.4f * PI);
+            DrawSprite(art.coin, (int)(t * 10), { 690, 30 }, 36 * pop);
+            Text(TextFormat("x %i", myPet.tokens), 715, 18, 24, GOLD);
 
-        if (screenNow == SHOP) {
-            Panel(shopPanel, GOLD);
-            Text("SHOP", shopPanel.x + 20, shopPanel.y + 15, 32, GOLD);
-            Text(TextFormat("You have %i tokens. Click food to feed me!", myPet.tokens), shopPanel.x + 20, shopPanel.y + 55, 18, RAYWHITE);
-            if (Button({ shopPanel.x + shopPanel.width - 110, shopPanel.y + 14, 95, 34 }, "Close", DARKGRAY, 18)) screenNow = MAIN;
-            for (int i = 0; i < 8; i++) {
-                Rectangle cell = foodCell(i);
-                bool canAfford = myPet.tokens >= FOODS[i].price;
-                if (CheckCollisionPointRec(GetMousePosition(), cell)) DrawRectangleRounded(cell, 0.1f, 6, Fade(GOLD, 0.15f));
-                float cx = cell.x + cell.width / 2;
-                DrawSprite(art.food, i, { cx, cell.y + 40 }, 64);
-                TextCentered(FOODS[i].name, cx, cell.y + 80, 20, RAYWHITE);
-                TextCentered(TextFormat("%i token%s", FOODS[i].price, FOODS[i].price == 1 ? "" : "s"), cx, cell.y + 104, 18, canAfford ? GOLD : GRAY);
-                std::string fills = TextFormat("+%i food", FOODS[i].hunger);
-                if (FOODS[i].hearts) fills += " +1 heart";
-                if (FOODS[i].exp) fills += " +1 EXP";
-                TextCentered(fills.c_str(), cx, cell.y + 126, FOODS[i].exp ? 14 : 16, GREEN);
-                if (Clicked(cell) && Buy(myPet, FOODS[i])) {
-                    eatenFood = i;
-                    eatTimer = 1.0f;
-                    screenNow = MAIN;
+            // Name (click to rename) and level
+            Rectangle nameBox = { 10, 56, 300, 28 };
+            if (editingName) {
+                DrawRectangleRounded(nameBox, 0.3f, 6, Fade(BLACK, 0.6f));
+                Text(TextFormat("%s%s", myPet.name.c_str(), fmodf(t, 1.0f) < 0.5f ? "_" : ""), nameBox.x + 6, nameBox.y + 4, 20, GOLD);
+                Text("Enter to save", nameBox.x + nameBox.width + 8, nameBox.y + 6, 16, GRAY);
+                if (TypeInto(myPet.name, 16) || (click && !CheckCollisionPointRec(GetMousePosition(), nameBox))) {
+                    if (myPet.name.empty()) myPet.name = "Tamagothu";
+                    editingName = false;
+                    myPet.Say("Call me " + myPet.name + "!");
                 }
-            }
-            if (Clicked({ 0, 0, 800, 600 }) && !CheckCollisionPointRec(GetMousePosition(), shopPanel)) screenNow = MAIN;
-        }
-
-        if (screenNow == GACHA) {
-            // UI.jpg's wish screen, scaled from 960 to 800 wide; its buttons and Close/Skip are part of the picture
-            DrawRectangle(0, 0, 800, 600, Color{ 15, 17, 22, 250 });
-            if (art.wishBg.id) DrawTexturePro(art.wishBg, { 0, 0, 960, 600 }, { 0, 0, 800, 500 }, { 0, 0 }, 0, WHITE);
-            int best = -1;
-            for (int item : lastWish) if (best < 0 || CLOTHES[item].stars > CLOTHES[best].stars) best = item;
-            Color glow = best >= 0 ? RARITY_COLORS[CLOTHES[best].stars] : GOLD;
-            Rectangle stage = { 150, 120, 500, 292 }; // covers the example result painted on UI.jpg
-            DrawRectangleRounded(stage, 0.08f, 8, Color{ 20, 18, 30, 255 });
-            DrawRectangleRoundedLinesEx(stage, 0.08f, 8, 3, glow);
-            if (best >= 0) {
-                DrawCircleGradient(400, 230, 120, Fade(glow, 0.45f), Fade(glow, 0.0f));
-                DrawSprite(art.clothes, best, { 400, 228 }, 150);
-                TextCentered(CLOTHES[best].name, 400, 318, 28, glow);
-                DrawStars(CLOTHES[best].stars, 400, 362, 11, glow);
             }
             else {
-                TextCentered("Wish for outfits!", 400, 160, 30, GOLD);
-                TextCentered("5-star: 0.6%, guaranteed by 90 wishes", 400, 215, 18, RARITY_COLORS[5]);
-                TextCentered("4-star: 5.1%, guaranteed every 10 wishes", 400, 240, 18, RARITY_COLORS[4]);
-                TextCentered("3-star 15%   2-star 30%   1-star 55%", 400, 265, 18, RAYWHITE);
-                TextCentered("Wear them from the Wardrobe", 400, 310, 18, GRAY);
+                const char* label = TextFormat("%s  Lv %i", myPet.name.c_str(), myPet.level);
+                bool hover = CheckCollisionPointRec(GetMousePosition(), nameBox) && screenNow == MAIN;
+                Text(label, nameBox.x + 6, nameBox.y + 4, 20, hover ? GOLD : RAYWHITE);
+                if (hover) Text("(click to rename)", nameBox.x + 12 + MeasureText(label, 20), nameBox.y + 7, 14, GRAY);
+                if (Clicked(nameBox)) editingName = true;
             }
-            TextCentered(TextFormat("5-star pity %i/90     4-star pity %i/10", myPet.pity5, myPet.pity4), 400, 388, 16, GRAY);
-            DrawRectangle(30, 428, 140, 60, Color{ 15, 17, 22, 255 }); // covers the example tokens/level on UI.jpg
-            Text(TextFormat("TOKENS: %i", myPet.tokens), 36, 434, 18, GREEN);
-            Text(TextFormat("LVL: %i", myPet.level), 36, 460, 18, GREEN);
+            Text(TextFormat("EXP: %i / %i", myPet.exp, myPet.maxExp), 16, 88, 20, SKYBLUE);
 
-            Rectangle wish1 = { 240, 417, 155, 62 }, wish10 = { 406, 417, 155, 62 }, close = { 620, 448, 150, 40 };
-            if (!art.wishBg.id) { Button(wish1, "Wish x1 (10)", DARKGREEN, 18); Button(wish10, "Wish x10 (90)", DARKGREEN, 18); Button(close, "Close", DARKGRAY, 18); }
-            for (Rectangle r : { wish1, wish10, close })
-                if (CheckCollisionPointRec(GetMousePosition(), r)) DrawRectangleRounded(r, 0.2f, 6, Fade(WHITE, 0.15f));
-            int count = Clicked(wish1) ? 1 : Clicked(wish10) ? 10 : 0;
-            if (count) {
-                std::vector<int> won = Wishes(myPet, count, rng);
-                if (!won.empty()) {
-                    lastWish = won;
-                    wishFlash = 0.8f;
-                    myPet.Say("Ooh, new clothes! Check the Wardrobe.");
+            // Hunger bar with the amount written on it
+            Text("Food", 540, 62, 20, RAYWHITE);
+            Rectangle hungerBar = { 600, 60, 185, 24 };
+            float full = (float)myPet.hunger / myPet.maxHunger;
+            Color hungerColor = full > 0.5f ? GREEN : full > 0.25f ? ORANGE : RED;
+            DrawRectangleRec(hungerBar, Color{ 20, 22, 28, 220 });
+            DrawRectangle((int)hungerBar.x, (int)hungerBar.y, (int)(hungerBar.width * full), (int)hungerBar.height, hungerColor);
+            DrawRectangleLinesEx(hungerBar, 2, BLACK);
+            TextCentered(TextFormat("%i / %i", myPet.hunger, myPet.maxHunger), hungerBar.x + hungerBar.width / 2, hungerBar.y + 4, 18, RAYWHITE);
+
+            const Vector2 petCenter = { 400, 330 };
+            if (myPet.IsDead()) {
+                // Death: the pet keels over and fades, the tombstone rises, then its ghost floats up
+                float d = deathTimer;
+                if (d < 1.5f) {
+                    float k = d / 1.5f;
+                    DrawSprite(art.mood[SAD], 0, { petCenter.x, petCenter.y + k * 40 }, 200 * (1 - 0.4f * k), 90 * k, Fade(GRAY, 1 - k));
                 }
-                else devMessage = myPet.currentAdvice;
+                float rise = std::clamp((d - 1.0f) / 1.0f, 0.0f, 1.0f);
+                rise = 1 - (1 - rise) * (1 - rise); // ease out
+                DrawSprite(art.tombstone, 0, { petCenter.x - 20, 640 - rise * 260 }, 220);
+                if (d > 1.8f) {
+                    float g = std::min(1.0f, (d - 1.8f) / 1.0f);
+                    DrawSprite(art.ghost, 0, { petCenter.x + 90, 260 - g * 40 + sinf(t * 2) * 8 }, 110, sinf(t * 1.5f) * 8, Fade(WHITE, g * 0.9f));
+                }
+                if (d > 2.5f) {
+                    TextCentered(TextFormat("%s crashed for good...", myPet.name.c_str()), 400, 120, 28, RAYWHITE);
+                    if (Button({ 285, 160, 230, 46 }, "Revive (lose all tokens)", MAROON, 18)) myPet.Revive();
+                }
             }
-            if (Clicked(close)) { screenNow = MAIN; devMessage.clear(); }
-            if (!devMessage.empty()) TextCentered(devMessage.c_str(), 400, 490, 18, RED);
+            else {
+                // Character: its outfit (or the mood animation), bobbing gently; angry trembles, pokes squish, eating bounces
+                float bob = myPet.myMOOD == ANGRY ? (float)GetRandomValue(-3, 3) : sinf(t * 3.0f) * 8.0f;
+                if (eatTimer > 0) bob = -fabsf(sinf(eatTimer * 12.0f)) * 12.0f;
+                float squash = 1.0f + 0.25f * sinf(pokeTimer / 0.4f * PI);
+                DrawPet(art, myPet, { petCenter.x, petCenter.y + bob }, 1.0f, t, squash, false);
 
-            // This wish's results, one card per outfit, framed in its rarity colour
-            for (size_t i = 0; i < lastWish.size(); i++) {
-                const Outfit& o = CLOTHES[lastWish[i]];
-                Rectangle card = { 400 - lastWish.size() * 38.0f + i * 76.0f, 512, 70, 80 };
-                DrawRectangleRounded(card, 0.15f, 6, Color{ 30, 30, 40, 255 });
-                DrawRectangleRoundedLinesEx(card, 0.15f, 6, 3, RARITY_COLORS[o.stars]);
-                DrawSprite(art.clothes, lastWish[i], { card.x + 35, card.y + 34 }, 52);
-                TextCentered(TextFormat("%i*", o.stars), card.x + 35, card.y + 62, 14, RARITY_COLORS[o.stars]);
+                // Food being eaten: shrinks into the pet's mouth
+                if (eatTimer > 0) DrawSprite(art.food, eatenFood, { 400, 370 }, 70 * eatTimer);
+
+                // Poke the pet
+                if (Clicked({ petCenter.x - 100, petCenter.y - 100, 200, 200 })) {
+                    myPet.Poke();
+                    pokeTimer = 0.4f;
+                }
+
+                // Mood and personality
+                const char* moodNames[] = { "Happy", "Sad", "Angry", "Reading your error..." };
+                const Color moodColors[] = { GREEN, SKYBLUE, RED, YELLOW };
+                TextCentered(TextFormat("Mood: %s", moodNames[myPet.myMOOD]), 400, 438, 22, moodColors[myPet.myMOOD]);
+                TextCentered(TextFormat("(%s)", PERSONALITIES[myPet.personality].name), 400, 462, 16, GRAY);
+
+                // Speech bubble with the pet's advice (red for errors)
+                DrawSpeechBubble(art, myPet, 400, 215);
+
+                // Bottom buttons
+                bool overShop = CheckCollisionPointRec(GetMousePosition(), shopButton) && screenNow == MAIN;
+                DrawSprite(art.shop, 0, { shopButton.x + 60, shopButton.y + 55 }, overShop ? 100.0f : 90.0f);
+                if (Clicked(shopButton)) screenNow = SHOP;
+                if (Button({ 160, 530, 120, 48 }, "Wish", Color{ 170, 120, 20, 255 })) screenNow = GACHA;
+                if (Button({ 290, 530, 150, 48 }, "Wardrobe", Color{ 70, 90, 160, 255 })) screenNow = WARDROBE;
+                if (Button({ 450, 530, 160, 48 }, "Personality", Color{ 140, 60, 120, 255 })) screenNow = PERSONALITIES_MENU;
+                if (Button({ 615, 530, 80, 48 }, "Wander", Color{ 40, 120, 110, 255 }, 16)) startWandering();
             }
-            if (wishFlash > 0) DrawRectangle(0, 0, 800, 600, Fade(glow, wishFlash * 0.7f));
-        }
 
-        if (screenNow == WARDROBE) {
-            Rectangle panel = { 40, 40, 720, 520 };
-            Panel(panel, Color{ 120, 150, 255, 255 });
-            int ownedKinds = 0;
-            for (int n : myPet.owned) ownedKinds += n > 0;
-            Text("WARDROBE", panel.x + 20, panel.y + 14, 30, Color{ 150, 180, 255, 255 });
-            Text(TextFormat("%i / %i outfits. Click one to wear it, click again to take it off.", ownedKinds, CLOTHES_COUNT),
-                 panel.x + 20, panel.y + 50, 16, RAYWHITE);
-            if (Button({ panel.x + panel.width - 110, panel.y + 14, 95, 34 }, "Close", DARKGRAY, 18)) screenNow = MAIN;
-            for (int i = 0; i < CLOTHES_COUNT; i++) {
-                Rectangle cell = { panel.x + 20 + (i % 8) * 85.0f, panel.y + 80 + (i / 8) * 86.0f, 80, 80 };
-                const Outfit& o = CLOTHES[i];
-                bool have = myPet.owned[i] > 0, on = myPet.equipped == i;
-                DrawRectangleRounded(cell, 0.15f, 6, on ? Fade(RARITY_COLORS[o.stars], 0.35f) : Color{ 22, 24, 30, 255 });
-                DrawRectangleRoundedLinesEx(cell, 0.15f, 6, on ? 4.0f : 2.0f, have ? RARITY_COLORS[o.stars] : Fade(RARITY_COLORS[o.stars], 0.3f));
-                if (have) {
-                    DrawSprite(art.clothes, i, { cell.x + 40, cell.y + 36 }, 54);
-                    if (myPet.owned[i] > 1) Text(TextFormat("x%i", myPet.owned[i]), cell.x + 52, cell.y + 60, 14, RAYWHITE);
-                    if (CheckCollisionPointRec(GetMousePosition(), cell)) {
-                        TextCentered(TextFormat("%s (%i-star)", o.name, o.stars), 400, panel.y + panel.height - 30, 20, RARITY_COLORS[o.stars]);
+            // Dev key
+            Rectangle devButton = { 700, 528, 87, 50 };
+            if (art.devKey.id) DrawTextureEx(art.devKey, { devButton.x, devButton.y }, 0, 1, WHITE);
+            else Button(devButton, "DEV", DARKGRAY);
+            if (Clicked(devButton)) { screenNow = devUnlocked ? DEV : DEV_LOGIN; password.clear(); devMessage.clear(); }
+
+            // ---------- WINDOWS ON TOP ----------
+            g_click = click && screenBefore != MAIN && screenNow != MAIN;
+
+            if (screenNow == SHOP) {
+                Panel(shopPanel, GOLD);
+                Text("SHOP", shopPanel.x + 20, shopPanel.y + 15, 32, GOLD);
+                Text(TextFormat("You have %i tokens. Click food to feed me!", myPet.tokens), shopPanel.x + 20, shopPanel.y + 55, 18, RAYWHITE);
+                if (Button({ shopPanel.x + shopPanel.width - 110, shopPanel.y + 14, 95, 34 }, "Close", DARKGRAY, 18)) screenNow = MAIN;
+                for (int i = 0; i < 8; i++) {
+                    Rectangle cell = foodCell(i);
+                    bool canAfford = myPet.tokens >= FOODS[i].price;
+                    if (CheckCollisionPointRec(GetMousePosition(), cell)) DrawRectangleRounded(cell, 0.1f, 6, Fade(GOLD, 0.15f));
+                    float cx = cell.x + cell.width / 2;
+                    DrawSprite(art.food, i, { cx, cell.y + 40 }, 64);
+                    TextCentered(FOODS[i].name, cx, cell.y + 80, 20, RAYWHITE);
+                    TextCentered(TextFormat("%i token%s", FOODS[i].price, FOODS[i].price == 1 ? "" : "s"), cx, cell.y + 104, 18, canAfford ? GOLD : GRAY);
+                    std::string fills = TextFormat("+%i food", FOODS[i].hunger);
+                    if (FOODS[i].hearts) fills += " +1 heart";
+                    if (FOODS[i].exp) fills += " +1 EXP";
+                    TextCentered(fills.c_str(), cx, cell.y + 126, FOODS[i].exp ? 14 : 16, GREEN);
+                    if (Clicked(cell) && Buy(myPet, FOODS[i])) {
+                        eatenFood = i;
+                        eatTimer = 1.0f;
+                        screenNow = MAIN;
                     }
-                    if (Clicked(cell)) {
-                        myPet.equipped = on ? -1 : i;
-                        myPet.Say(on ? "Back to my natural look!" : std::string("How do I look in my ") + o.name + "?");
+                }
+                if (Clicked({ 0, 0, 800, 600 }) && !CheckCollisionPointRec(GetMousePosition(), shopPanel)) screenNow = MAIN;
+            }
+
+            if (screenNow == GACHA) {
+                // UI.jpg's wish screen, scaled from 960 to 800 wide; its buttons and Close/Skip are part of the picture
+                DrawRectangle(0, 0, 800, 600, Color{ 15, 17, 22, 250 });
+                if (art.wishBg.id) DrawTexturePro(art.wishBg, { 0, 0, 960, 600 }, { 0, 0, 800, 500 }, { 0, 0 }, 0, WHITE);
+                int best = -1;
+                for (int item : lastWish) if (best < 0 || CLOTHES[item].stars > CLOTHES[best].stars) best = item;
+                Color glow = best >= 0 ? RARITY_COLORS[CLOTHES[best].stars] : GOLD;
+                Rectangle stage = { 150, 120, 500, 292 }; // covers the example result painted on UI.jpg
+                DrawRectangleRounded(stage, 0.08f, 8, Color{ 20, 18, 30, 255 });
+                DrawRectangleRoundedLinesEx(stage, 0.08f, 8, 3, glow);
+                if (best >= 0) {
+                    DrawCircleGradient(400, 230, 120, Fade(glow, 0.45f), Fade(glow, 0.0f));
+                    DrawSprite(art.clothes, best, { 400, 228 }, 150);
+                    TextCentered(CLOTHES[best].name, 400, 318, 28, glow);
+                    DrawStars(CLOTHES[best].stars, 400, 362, 11, glow);
+                }
+                else {
+                    TextCentered("Wish for outfits!", 400, 160, 30, GOLD);
+                    TextCentered("5-star: 0.6%, guaranteed by 90 wishes", 400, 215, 18, RARITY_COLORS[5]);
+                    TextCentered("4-star: 5.1%, guaranteed every 10 wishes", 400, 240, 18, RARITY_COLORS[4]);
+                    TextCentered("3-star 15%   2-star 30%   1-star 55%", 400, 265, 18, RAYWHITE);
+                    TextCentered("Wear them from the Wardrobe", 400, 310, 18, GRAY);
+                }
+                TextCentered(TextFormat("5-star pity %i/90     4-star pity %i/10", myPet.pity5, myPet.pity4), 400, 388, 16, GRAY);
+                DrawRectangle(30, 428, 140, 60, Color{ 15, 17, 22, 255 }); // covers the example tokens/level on UI.jpg
+                Text(TextFormat("TOKENS: %i", myPet.tokens), 36, 434, 18, GREEN);
+                Text(TextFormat("LVL: %i", myPet.level), 36, 460, 18, GREEN);
+
+                Rectangle wish1 = { 240, 417, 155, 62 }, wish10 = { 406, 417, 155, 62 }, close = { 620, 448, 150, 40 };
+                if (!art.wishBg.id) { Button(wish1, "Wish x1 (10)", DARKGREEN, 18); Button(wish10, "Wish x10 (90)", DARKGREEN, 18); Button(close, "Close", DARKGRAY, 18); }
+                for (Rectangle r : { wish1, wish10, close })
+                    if (CheckCollisionPointRec(GetMousePosition(), r)) DrawRectangleRounded(r, 0.2f, 6, Fade(WHITE, 0.15f));
+                int count = Clicked(wish1) ? 1 : Clicked(wish10) ? 10 : 0;
+                if (count) {
+                    std::vector<int> won = Wishes(myPet, count, rng);
+                    if (!won.empty()) {
+                        lastWish = won;
+                        wishFlash = 0.8f;
+                        myPet.Say("Ooh, new clothes! Check the Wardrobe.");
+                    }
+                    else devMessage = myPet.currentAdvice;
+                }
+                if (Clicked(close)) { screenNow = MAIN; devMessage.clear(); }
+                if (!devMessage.empty()) TextCentered(devMessage.c_str(), 400, 490, 18, RED);
+
+                // This wish's results, one card per outfit, framed in its rarity colour
+                for (size_t i = 0; i < lastWish.size(); i++) {
+                    const Outfit& o = CLOTHES[lastWish[i]];
+                    Rectangle card = { 400 - lastWish.size() * 38.0f + i * 76.0f, 512, 70, 80 };
+                    DrawRectangleRounded(card, 0.15f, 6, Color{ 30, 30, 40, 255 });
+                    DrawRectangleRoundedLinesEx(card, 0.15f, 6, 3, RARITY_COLORS[o.stars]);
+                    DrawSprite(art.clothes, lastWish[i], { card.x + 35, card.y + 34 }, 52);
+                    TextCentered(TextFormat("%i*", o.stars), card.x + 35, card.y + 62, 14, RARITY_COLORS[o.stars]);
+                }
+                if (wishFlash > 0) DrawRectangle(0, 0, 800, 600, Fade(glow, wishFlash * 0.7f));
+            }
+
+            if (screenNow == WARDROBE) {
+                Rectangle panel = { 40, 40, 720, 520 };
+                Panel(panel, Color{ 120, 150, 255, 255 });
+                int ownedKinds = 0;
+                for (int n : myPet.owned) ownedKinds += n > 0;
+                Text("WARDROBE", panel.x + 20, panel.y + 14, 30, Color{ 150, 180, 255, 255 });
+                Text(TextFormat("%i / %i outfits. Click one to wear it, click again to take it off.", ownedKinds, CLOTHES_COUNT),
+                     panel.x + 20, panel.y + 50, 16, RAYWHITE);
+                if (Button({ panel.x + panel.width - 110, panel.y + 14, 95, 34 }, "Close", DARKGRAY, 18)) screenNow = MAIN;
+                for (int i = 0; i < CLOTHES_COUNT; i++) {
+                    Rectangle cell = { panel.x + 20 + (i % 8) * 85.0f, panel.y + 80 + (i / 8) * 86.0f, 80, 80 };
+                    const Outfit& o = CLOTHES[i];
+                    bool have = myPet.owned[i] > 0, on = myPet.equipped == i;
+                    DrawRectangleRounded(cell, 0.15f, 6, on ? Fade(RARITY_COLORS[o.stars], 0.35f) : Color{ 22, 24, 30, 255 });
+                    DrawRectangleRoundedLinesEx(cell, 0.15f, 6, on ? 4.0f : 2.0f, have ? RARITY_COLORS[o.stars] : Fade(RARITY_COLORS[o.stars], 0.3f));
+                    if (have) {
+                        DrawSprite(art.clothes, i, { cell.x + 40, cell.y + 36 }, 54);
+                        if (myPet.owned[i] > 1) Text(TextFormat("x%i", myPet.owned[i]), cell.x + 52, cell.y + 60, 14, RAYWHITE);
+                        if (CheckCollisionPointRec(GetMousePosition(), cell)) {
+                            TextCentered(TextFormat("%s (%i-star)", o.name, o.stars), 400, panel.y + panel.height - 30, 20, RARITY_COLORS[o.stars]);
+                        }
+                        if (Clicked(cell)) {
+                            myPet.equipped = on ? -1 : i;
+                            myPet.Say(on ? "Back to my natural look!" : std::string("How do I look in my ") + o.name + "?");
+                        }
+                    }
+                    else TextCentered("?", cell.x + 40, cell.y + 26, 28, Fade(RARITY_COLORS[o.stars], 0.4f));
+                    TextCentered(TextFormat("%i*", o.stars), cell.x + 14, cell.y + 4, 12, Fade(RARITY_COLORS[o.stars], have ? 1.0f : 0.4f));
+                }
+            }
+
+            if (screenNow == PERSONALITIES_MENU) {
+                Rectangle panel = { 110, 50, 580, 500 };
+                Panel(panel, Color{ 220, 120, 200, 255 });
+                Text("PERSONALITY", panel.x + 20, panel.y + 14, 30, Color{ 240, 150, 220, 255 });
+                Text("Pick how I talk when I'm bored or poked.", panel.x + 20, panel.y + 52, 16, RAYWHITE);
+                if (Button({ panel.x + panel.width - 110, panel.y + 14, 95, 34 }, "Close", DARKGRAY, 18)) screenNow = MAIN;
+                for (int i = 0; i < PERSONALITY_COUNT; i++) {
+                    Rectangle row = { panel.x + 20, panel.y + 85 + i * 67.0f, panel.width - 40, 60 };
+                    bool current = myPet.personality == i;
+                    bool hover = CheckCollisionPointRec(GetMousePosition(), row);
+                    DrawRectangleRounded(row, 0.2f, 6, current ? Color{ 110, 50, 100, 255 } : hover ? Color{ 60, 50, 70, 255 } : Color{ 40, 40, 50, 255 });
+                    Text(PERSONALITIES[i].name, row.x + 14, row.y + 8, 22, current ? GOLD : RAYWHITE);
+                    Text(TextFormat("\"%s\"", PERSONALITIES[i].idle[0]), row.x + 14, row.y + 36, 14, GRAY);
+                    if (Clicked(row)) {
+                        myPet.personality = i;
+                        myPet.Say(PERSONALITIES[i].hello);
+                        screenNow = MAIN;
                     }
                 }
-                else TextCentered("?", cell.x + 40, cell.y + 26, 28, Fade(RARITY_COLORS[o.stars], 0.4f));
-                TextCentered(TextFormat("%i*", o.stars), cell.x + 14, cell.y + 4, 12, Fade(RARITY_COLORS[o.stars], have ? 1.0f : 0.4f));
             }
-        }
 
-        if (screenNow == PERSONALITIES_MENU) {
-            Rectangle panel = { 110, 50, 580, 500 };
-            Panel(panel, Color{ 220, 120, 200, 255 });
-            Text("PERSONALITY", panel.x + 20, panel.y + 14, 30, Color{ 240, 150, 220, 255 });
-            Text("Pick how I talk when I'm bored or poked.", panel.x + 20, panel.y + 52, 16, RAYWHITE);
-            if (Button({ panel.x + panel.width - 110, panel.y + 14, 95, 34 }, "Close", DARKGRAY, 18)) screenNow = MAIN;
-            for (int i = 0; i < PERSONALITY_COUNT; i++) {
-                Rectangle row = { panel.x + 20, panel.y + 85 + i * 67.0f, panel.width - 40, 60 };
-                bool current = myPet.personality == i;
-                bool hover = CheckCollisionPointRec(GetMousePosition(), row);
-                DrawRectangleRounded(row, 0.2f, 6, current ? Color{ 110, 50, 100, 255 } : hover ? Color{ 60, 50, 70, 255 } : Color{ 40, 40, 50, 255 });
-                Text(PERSONALITIES[i].name, row.x + 14, row.y + 8, 22, current ? GOLD : RAYWHITE);
-                Text(TextFormat("\"%s\"", PERSONALITIES[i].idle[0]), row.x + 14, row.y + 36, 14, GRAY);
-                if (Clicked(row)) {
-                    myPet.personality = i;
-                    myPet.Say(PERSONALITIES[i].hello);
-                    screenNow = MAIN;
+            if (screenNow == DEV_LOGIN) {
+                Rectangle panel = { 200, 180, 400, 220 };
+                Panel(panel, GREEN);
+                Text("DEV MODE", panel.x + 20, panel.y + 16, 28, GREEN);
+                Text("Password:", panel.x + 20, panel.y + 66, 20, RAYWHITE);
+                Rectangle box = { panel.x + 20, panel.y + 94, 360, 36 };
+                DrawRectangleRounded(box, 0.2f, 6, BLACK);
+                Text(TextFormat("%s%s", std::string(password.size(), '*').c_str(), fmodf(t, 1.0f) < 0.5f ? "_" : ""), box.x + 10, box.y + 8, 22, GREEN);
+                bool enter = TypeInto(password, 32);
+                if (Button({ panel.x + 20, panel.y + 150, 170, 44 }, "Unlock", DARKGREEN) || enter) {
+                    if (password == "robloxslop") { devUnlocked = true; screenNow = DEV; devMessage = "Welcome, developer."; }
+                    else { devMessage = "Wrong password"; password.clear(); }
                 }
+                if (Button({ panel.x + 210, panel.y + 150, 170, 44 }, "Cancel", DARKGRAY)) screenNow = MAIN;
+                if (!devMessage.empty()) Text(devMessage.c_str(), panel.x + 160, panel.y + 66, 18, RED);
             }
+
+            if (screenNow == DEV) {
+                Rectangle panel = { 30, 30, 740, 540 };
+                Panel(panel, GREEN);
+                Text("DEV MODE", panel.x + 20, panel.y + 14, 30, GREEN);
+                if (Button({ panel.x + panel.width - 110, panel.y + 14, 95, 34 }, "Close", DARKGRAY, 18)) screenNow = MAIN;
+                Text(TextFormat("HP %i/%i   Food %i/%i   Lv %i   EXP %i/%i   Tokens %i", myPet.health, myPet.maxHealth, myPet.hunger,
+                                myPet.maxHunger, myPet.level, myPet.exp, myPet.maxExp, myPet.tokens), panel.x + 20, panel.y + 56, 18, RAYWHITE);
+                Text(TextFormat("Pity 5* %i/90  4* %i/10   Next token %.0fs   Next hunger drop %.0fs   Time x%.0f", myPet.pity5, myPet.pity4,
+                                TOKEN_EVERY - myPet.uptimeTimer, HUNGER_EVERY - myPet.hungerTimer, timeScale), panel.x + 20, panel.y + 80, 16, GRAY);
+
+                const char* labels[] = { "+10 tokens", "+100 tokens", "+1000 tokens", "Level up",
+                                         "Hurt -1 heart", "Heal full", "Starve (food 0)", "Feed full",
+                                         "Kill pet", "Revive", "Fake compile OK", "Fake compile error",
+                                         "Idle line now", "5* pity -> 89", "Reset pity", "Unlock all clothes",
+                                         "Time x1", "Time x10", "Time x60", "Reset pet" };
+                int pressed = -1;
+                for (int i = 0; i < 20; i++) {
+                    Rectangle b = { panel.x + 20 + (i % 4) * 177.0f, panel.y + 115 + (i / 4) * 62.0f, 167, 50 };
+                    Color c = i >= 16 ? Color{ 40, 90, 140, 255 } : i >= 8 && i < 10 ? MAROON : Color{ 30, 100, 50, 255 };
+                    if (i == 19) c = Color{ 120, 40, 40, 255 };
+                    if (Button(b, labels[i], c, 18)) pressed = i;
+                }
+                switch (pressed) {
+                    case 0: myPet.tokens += 10; break;
+                    case 1: myPet.tokens += 100; break;
+                    case 2: myPet.tokens += 1000; break;
+                    case 3: myPet.LevelUp(); break;
+                    case 4: myPet.Hurt(); break;
+                    case 5: myPet.health = myPet.maxHealth; break;
+                    case 6: myPet.hunger = 0; break;
+                    case 7: myPet.hunger = myPet.maxHunger; break;
+                    case 8: myPet.health = 0; screenNow = MAIN; break;
+                    case 9: if (myPet.IsDead()) myPet.Revive(); break;
+                    case 10: std::ofstream(logPath) << "COMPILE_SUCCESS\n"; break;
+                    case 11: std::ofstream(logPath) << "COMPILE_ERROR\ndev.cpp:7:3: error: expected ';' before 'return'\n"; break;
+                    case 12: myPet.quietTimer = IDLE_EVERY; myPet.adviceIsError = false; break;
+                    case 13: myPet.pity5 = 89; break;
+                    case 14: myPet.pity5 = myPet.pity4 = 0; break;
+                    case 15: for (int& n : myPet.owned) n = std::max(n, 1); break;
+                    case 16: timeScale = 1; break;
+                    case 17: timeScale = 10; break;
+                    case 18: timeScale = 60; break;
+                    case 19: { std::string name = myPet.name; myPet = Pet(); myPet.name = name; lastWish.clear(); break; }
+                }
+                if (pressed >= 0) devMessage = std::string("Done: ") + labels[pressed];
+                Text(devMessage.c_str(), panel.x + 20, panel.y + panel.height - 36, 18, GREEN);
+            }
+
         }
-
-        if (screenNow == DEV_LOGIN) {
-            Rectangle panel = { 200, 180, 400, 220 };
-            Panel(panel, GREEN);
-            Text("DEV MODE", panel.x + 20, panel.y + 16, 28, GREEN);
-            Text("Password:", panel.x + 20, panel.y + 66, 20, RAYWHITE);
-            Rectangle box = { panel.x + 20, panel.y + 94, 360, 36 };
-            DrawRectangleRounded(box, 0.2f, 6, BLACK);
-            Text(TextFormat("%s%s", std::string(password.size(), '*').c_str(), fmodf(t, 1.0f) < 0.5f ? "_" : ""), box.x + 10, box.y + 8, 22, GREEN);
-            bool enter = TypeInto(password, 32);
-            if (Button({ panel.x + 20, panel.y + 150, 170, 44 }, "Unlock", DARKGREEN) || enter) {
-                if (password == "robloxslop") { devUnlocked = true; screenNow = DEV; devMessage = "Welcome, developer."; }
-                else { devMessage = "Wrong password"; password.clear(); }
-            }
-            if (Button({ panel.x + 210, panel.y + 150, 170, 44 }, "Cancel", DARKGRAY)) screenNow = MAIN;
-            if (!devMessage.empty()) Text(devMessage.c_str(), panel.x + 160, panel.y + 66, 18, RED);
-        }
-
-        if (screenNow == DEV) {
-            Rectangle panel = { 30, 30, 740, 540 };
-            Panel(panel, GREEN);
-            Text("DEV MODE", panel.x + 20, panel.y + 14, 30, GREEN);
-            if (Button({ panel.x + panel.width - 110, panel.y + 14, 95, 34 }, "Close", DARKGRAY, 18)) screenNow = MAIN;
-            Text(TextFormat("HP %i/%i   Food %i/%i   Lv %i   EXP %i/%i   Tokens %i", myPet.health, myPet.maxHealth, myPet.hunger,
-                            myPet.maxHunger, myPet.level, myPet.exp, myPet.maxExp, myPet.tokens), panel.x + 20, panel.y + 56, 18, RAYWHITE);
-            Text(TextFormat("Pity 5* %i/90  4* %i/10   Next token %.0fs   Next hunger drop %.0fs   Time x%.0f", myPet.pity5, myPet.pity4,
-                            TOKEN_EVERY - myPet.uptimeTimer, HUNGER_EVERY - myPet.hungerTimer, timeScale), panel.x + 20, panel.y + 80, 16, GRAY);
-
-            const char* labels[] = { "+10 tokens", "+100 tokens", "+1000 tokens", "Level up",
-                                     "Hurt -1 heart", "Heal full", "Starve (food 0)", "Feed full",
-                                     "Kill pet", "Revive", "Fake compile OK", "Fake compile error",
-                                     "Idle line now", "5* pity -> 89", "Reset pity", "Unlock all clothes",
-                                     "Time x1", "Time x10", "Time x60", "Reset pet" };
-            int pressed = -1;
-            for (int i = 0; i < 20; i++) {
-                Rectangle b = { panel.x + 20 + (i % 4) * 177.0f, panel.y + 115 + (i / 4) * 62.0f, 167, 50 };
-                Color c = i >= 16 ? Color{ 40, 90, 140, 255 } : i >= 8 && i < 10 ? MAROON : Color{ 30, 100, 50, 255 };
-                if (i == 19) c = Color{ 120, 40, 40, 255 };
-                if (Button(b, labels[i], c, 18)) pressed = i;
-            }
-            switch (pressed) {
-                case 0: myPet.tokens += 10; break;
-                case 1: myPet.tokens += 100; break;
-                case 2: myPet.tokens += 1000; break;
-                case 3: myPet.LevelUp(); break;
-                case 4: myPet.Hurt(); break;
-                case 5: myPet.health = myPet.maxHealth; break;
-                case 6: myPet.hunger = 0; break;
-                case 7: myPet.hunger = myPet.maxHunger; break;
-                case 8: myPet.health = 0; screenNow = MAIN; break;
-                case 9: if (myPet.IsDead()) myPet.Revive(); break;
-                case 10: std::ofstream(logPath) << "COMPILE_SUCCESS\n"; break;
-                case 11: std::ofstream(logPath) << "COMPILE_ERROR\ndev.cpp:7:3: error: expected ';' before 'return'\n"; break;
-                case 12: myPet.quietTimer = IDLE_EVERY; myPet.adviceIsError = false; break;
-                case 13: myPet.pity5 = 89; break;
-                case 14: myPet.pity5 = myPet.pity4 = 0; break;
-                case 15: for (int& n : myPet.owned) n = std::max(n, 1); break;
-                case 16: timeScale = 1; break;
-                case 17: timeScale = 10; break;
-                case 18: timeScale = 60; break;
-                case 19: { std::string name = myPet.name; myPet = Pet(); myPet.name = name; lastWish.clear(); break; }
-            }
-            if (pressed >= 0) devMessage = std::string("Done: ") + labels[pressed];
-            Text(devMessage.c_str(), panel.x + 20, panel.y + panel.height - 36, 18, GREEN);
-        }
-
         EndBlendMode();
         EndTextureMode();
 

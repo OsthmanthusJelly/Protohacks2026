@@ -28,7 +28,7 @@ if %errorlevel% neq 0 (
     echo ----------------------------------------
     echo BUILD SUCCESS! The pet gains EXP.
     echo ----------------------------------------
-    :: .exe files are git-ignored, so share the game as Tamagothu.zip: the exe plus the sprites it loads
-    powershell -NoProfile -Command "$z = Join-Path $env:TEMP 'Tamagothu'; Remove-Item $z -Recurse -ErrorAction SilentlyContinue; New-Item -ItemType Directory $z\Sprites | Out-Null; Copy-Item game.exe, petlog.ps1, pet_hook.ps1 $z; Copy-Item Sprites\*.png $z\Sprites; Compress-Archive -Force $z Tamagothu.zip"
+    :: .exe files are git-ignored, so share the game as wake_up_tamagachi.zip: the exe plus the sprites it loads
+    powershell -NoProfile -Command "$z = Join-Path $env:TEMP 'wake_up_tamagachi'; Remove-Item $z -Recurse -ErrorAction SilentlyContinue; New-Item -ItemType Directory $z\Sprites | Out-Null; Copy-Item game.exe, petlog.ps1, pet_hook.ps1 $z; Copy-Item Sprites\*.png $z\Sprites; Compress-Archive -Force $z wake_up_tamagachi.zip"
     game.exe
 )
